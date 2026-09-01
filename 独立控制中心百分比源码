@@ -1,0 +1,118 @@
+#import <UIKit/UIKit.h>
+#import <IOKit/IOKitLib.h>
+
+@protocol CCUIContentModuleContentViewController <NSObject>
+@optional
+- (CGFloat)preferredExpandedContentHeight;
+@end
+
+@protocol CCUIContentModule <NSObject>
+@property (nonatomic,readonly) UIViewController<CCUIContentModuleContentViewController> *contentViewController;
+@end
+
+static int getRealBatteryPercent(void) {
+    // 兼容 iOS 16/17/18 主流越狱的 kIOMainPortDefault 常量
+    mach_port_t mainPort = kIOMainPortDefault;
+    io_service_t service = IOServiceGetMatchingService(mainPort, IOServiceMatching("AppleSmartBattery"));
+    if (!service) return 0;
+
+    CFNumberRef currentCapObj = IORegistryEntryCreateCFProperty(service, CFSTR("AppleRawCurrentCapacity"), kCFAllocatorDefault, 0);
+    CFNumberRef maxCapObj = IORegistryEntryCreateCFProperty(service, CFSTR("AppleRawMaxCapacity"), kCFAllocatorDefault, 0);
+
+    IOObjectRelease(service);
+
+    if (!currentCapObj || !maxCapObj) {
+        if(currentCapObj) CFRelease(currentCapObj);
+        if(maxCapObj) CFRelease(maxCapObj);
+        return 0;
+    }
+
+    NSInteger current = 0;
+    NSInteger max = 0;
+    CFNumberGetValue(currentCapObj, kCFNumberNSIntegerType, &current);
+    CFNumberGetValue(maxCapObj, kCFNumberNSIntegerType, &max);
+
+    CFRelease(currentCapObj);
+    CFRelease(maxCapObj);
+
+    if (max <= 0) return 0;
+    int percent = (int)round(((double)current / (double)max) * 100.0);
+
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    return percent;
+}
+
+@interface BatteryCCViewController : UIViewController<CCUIContentModuleContentViewController>
+@property (nonatomic, strong) UILabel *batteryLabel;
+@end
+
+@implementation BatteryCCViewController
+
+- (BOOL)_canShowWhileLocked {
+    return YES; // 保证锁屏界面下正常渲染
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    self.batteryLabel = [[UILabel alloc] init];
+    self.batteryLabel.textAlignment = NSTextAlignmentCenter;
+    self.batteryLabel.textColor = [UIColor whiteColor];
+    self.batteryLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    [self.view addSubview:self.batteryLabel];
+
+    [self updateBatteryText];
+
+    // 监听电量改变与省电模式切换，实时刷新
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(updateBatteryText)
+                                                 name:UIDeviceBatteryLevelDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(updateBatteryText)
+                                                 name:NSProcessInfoPowerStateDidChangeNotification
+                                               object:nil];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self updateBatteryText]; // 每次划出控制中心时强制刷新最新电量
+}
+
+- (void)viewWillLayoutSubviews {
+    [super viewWillLayoutSubviews];
+    self.batteryLabel.frame = self.view.bounds;
+}
+
+- (void)updateBatteryText {
+    int percent = getRealBatteryPercent();
+    BOOL lowPower = [[NSProcessInfo processInfo] isLowPowerModeEnabled];
+    NSString *icon = lowPower ? @"🪫 " : @"🔋 ";
+    self.batteryLabel.text = [NSString stringWithFormat:@"%@%d%%", icon, percent];
+}
+
+- (CGFloat)preferredExpandedContentHeight {
+    return 100.0;
+}
+
+@end
+
+@interface BatteryCCModule : NSObject <CCUIContentModule>
+@property (nonatomic, strong) BatteryCCViewController *contentViewController;
+@end
+
+@implementation BatteryCCModule
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        self.contentViewController = [[BatteryCCViewController alloc] init];
+    }
+    return self;
+}
+@end

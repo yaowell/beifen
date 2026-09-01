@@ -1,0 +1,75 @@
+/* 1. 基础清理 */
+UPDATE "sportinfo" SET "time" = REPLACE("time", '/', '-');
+UPDATE "huihualog" SET "time" = REPLACE("time", '/', '-');
+
+/* 2. 修复旧数据 - sportinfo (小时翻转) */
+UPDATE "sportinfo"
+SET "time" = (
+    SELECT 
+        substr(c, 1, 11) || 
+        printf('%02d', (CASE 
+            WHEN "time" LIKE '%下午%' OR "time" LIKE '%PM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12) + 12
+            WHEN "time" LIKE '%上午%' OR "time" LIKE '%AM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12)
+            ELSE CAST(substr(c, 12, 2) AS INT)
+        END)) || 
+        substr(c, 11 + instr(substr(c, 12), ':'))
+    FROM (SELECT replace(replace(replace(replace(trim("time"), '上午', ' '), '下午', ' '), 'AM', ' '), 'PM', ' ') AS c)
+)
+WHERE "time" LIKE '%午%' OR "time" LIKE '%M%';
+
+/* 3. 修复旧数据 - huihualog (小时翻转) */
+UPDATE "huihualog"
+SET "time" = (
+    SELECT 
+        substr(c, 1, 11) || 
+        printf('%02d', (CASE 
+            WHEN "time" LIKE '%下午%' OR "time" LIKE '%PM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12) + 12
+            WHEN "time" LIKE '%上午%' OR "time" LIKE '%AM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12)
+            ELSE CAST(substr(c, 12, 2) AS INT)
+        END)) || 
+        substr(c, 11 + instr(substr(c, 12), ':'))
+    FROM (SELECT replace(replace(replace(replace(trim("time"), '上午', ' '), '下午', ' '), 'AM', ' '), 'PM', ' ') AS c)
+)
+WHERE "time" LIKE '%午%' OR "time" LIKE '%M%';
+
+/* 4. 创建自动同步触发器 - sportinfo */
+DROP TRIGGER IF EXISTS "sync_time_24h";
+CREATE TRIGGER "sync_time_24h" AFTER INSERT ON "sportinfo" FOR EACH ROW
+BEGIN
+    UPDATE "sportinfo" SET "time" = (
+        SELECT 
+            substr(c, 1, 11) || 
+            printf('%02d', (CASE 
+                WHEN NEW."time" LIKE '%下午%' OR NEW."time" LIKE '%PM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12) + 12
+                WHEN NEW."time" LIKE '%上午%' OR NEW."time" LIKE '%AM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12)
+                ELSE CAST(substr(c, 12, 2) AS INT)
+            END)) || 
+            substr(c, 11 + instr(substr(c, 12), ':'))
+        FROM (SELECT replace(replace(replace(replace(trim(NEW."time"), '上午', ' '), '下午', ' '), 'AM', ' '), 'PM', ' ') AS c)
+    ) WHERE rowid = NEW.rowid;
+END;
+
+/* 5. 创建自动同步触发器 - huihualog */
+DROP TRIGGER IF EXISTS "sync_huihua_24h";
+CREATE TRIGGER "sync_huihua_24h" AFTER INSERT ON "huihualog" FOR EACH ROW
+BEGIN
+    UPDATE "huihualog" SET "time" = (
+        SELECT 
+            substr(c, 1, 11) || 
+            printf('%02d', (CASE 
+                WHEN NEW."time" LIKE '%下午%' OR NEW."time" LIKE '%PM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12) + 12
+                WHEN NEW."time" LIKE '%上午%' OR NEW."time" LIKE '%AM%' THEN (CAST(substr(c, 12, instr(substr(c, 12), ':')-1) AS INT) % 12)
+                ELSE CAST(substr(c, 12, 2) AS INT)
+            END)) || 
+            substr(c, 11 + instr(substr(c, 12), ':'))
+        FROM (SELECT replace(replace(replace(replace(trim(NEW."time"), '上午', ' '), '下午', ' '), 'AM', ' '), 'PM', ' ') AS c)
+    ) WHERE rowid = NEW.rowid;
+END;
+
+/* 6. 最后全局清理一遍空格 */
+UPDATE "sportinfo" SET "time" = trim("time");
+UPDATE "huihualog" SET "time" = trim("time");
+
+/* 7. 写入物理文件 */
+PRAGMA journal_mode = DELETE;
+VACUUM;

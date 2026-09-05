@@ -260,35 +260,8 @@ static void BMLayoutBatteryView(UIViewController *controller) {
 	CGFloat y = floor(viewHeight * yRatio - height * 0.5);
 
 	batteryView.frame = CGRectMake(x, y, width, height);
-	// ✅ 恢复原有的 1.30 倍拉伸，把整体图标恢复到原本的大小
-	batteryView.transform = CGAffineTransformMakeScale(1.30, 1.30);
+	batteryView.transform = CGAffineTransformMakeScale(1.40, 1.40);
 	[controller.view bringSubviewToFront:batteryView];
-}
-
-static BOOL BMShouldRoundBatteryLayer(CALayer *layer) {
-	if (!layer) {
-		return NO;
-	}
-
-	CGRect bounds = layer.bounds;
-	CGFloat width = CGRectGetWidth(bounds);
-	CGFloat height = CGRectGetHeight(bounds);
-	return width >= 5.0 && width <= 40.0 && height >= 5.0 && height <= 20.0;
-}
-
-static void BMApplyCornerRadiusToLayerTree(CALayer *layer, CGFloat radius) {
-	if (!layer) {
-		return;
-	}
-
-	if (BMShouldRoundBatteryLayer(layer)) {
-		layer.cornerRadius = MIN(radius, CGRectGetHeight(layer.bounds) * 0.5);
-		layer.masksToBounds = radius > 0.0;
-	}
-
-	for (CALayer *sublayer in layer.sublayers) {
-		BMApplyCornerRadiusToLayerTree(sublayer, radius);
-	}
 }
 
 static void BMSetManagedBatteryVisibility(_UIBatteryView *batteryView, BOOL visible) {
@@ -334,10 +307,6 @@ static void BMApplyBatteryStyling(_UIBatteryView *batteryView) {
 	if ([batteryView respondsToSelector:@selector(setBoltColor:)]) {
 		[batteryView setBoltColor:fillColor];
 	}
-	
-	for (CALayer *sublayer in batteryView.layer.sublayers) {
-		BMApplyCornerRadiusToLayerTree(sublayer, 4.0);
-	}
 
 	BMEnumerateSubviews(batteryView, ^(UIView *subview) {
 		if ([subview isKindOfClass:[UILabel class]]) {
@@ -350,8 +319,7 @@ static void BMApplyBatteryStyling(_UIBatteryView *batteryView) {
 			CGRect containerFrame = label.frame;
 			CGFloat overlayWidth = CGRectGetWidth(containerFrame) + BMOverlayExtraWidth();
 			CGFloat overlayOriginX = CGRectGetMidX(containerFrame) - (overlayWidth * 0.5);
-			// ✅ 配合 1.30 倍的外框拉伸，锁死内部基础字号为 11.0，放大后正好居中且绝不溢出
-			CGFloat maxFontSize = 11.0;
+			CGFloat maxFontSize = 11.1;
 			UIColor *textColor = BMManagedBatteryViewTextColor(batteryView);
 			NSString *displayText = BMManagedBatteryViewDisplayedText(batteryView, label);
 			
@@ -362,7 +330,12 @@ static void BMApplyBatteryStyling(_UIBatteryView *batteryView) {
 				UIFont *normalFont = BMManagedBatteryViewFontToFitWidth(overlayWidth, maxFontSize, @"100");
 				BMConfigureOverlayLabel(overlayLabel, textColor);
 				overlayLabel.font = normalFont;
-				overlayLabel.frame = CGRectMake(overlayOriginX, CGRectGetMinY(containerFrame), overlayWidth, CGRectGetHeight(containerFrame));
+				
+				CGFloat parentHeight = CGRectGetHeight(batteryView.bounds);
+				CGFloat labelHeight = CGRectGetHeight(containerFrame);
+				CGFloat centerY = floor((parentHeight - labelHeight) * 0.5) + 0.5;
+
+				overlayLabel.frame = CGRectMake(overlayOriginX, centerY, overlayWidth, labelHeight);
 				overlayLabel.attributedText = [[NSAttributedString alloc] initWithString:displayText attributes:@{
 					NSForegroundColorAttributeName: textColor,
 					NSFontAttributeName: normalFont

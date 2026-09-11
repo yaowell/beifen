@@ -1,0 +1,330 @@
+#import <UIKit/UIKit.h>
+#import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
+#import <notify.h>
+
+typedef struct {
+    NSUInteger width;
+    NSUInteger height;
+} CCUILayoutSize;
+
+static NSString * const kPrefsID = @"com.yaowell.hideavcontrols";
+static NSString * const kNotifyName = @"com.yaowell.hideavcontrols.changed";
+
+static int gStateToken = 0;
+static BOOL gIsEnabled = YES;
+
+static __weak id gModuleCollectionViewController = nil;
+static __weak id gModuleManager = nil;
+
+static void CHUpdateEnableState(void)
+{
+    CFPreferencesAppSynchronize(
+        (__bridge CFStringRef)kPrefsID
+    );
+
+    CFPropertyListRef value =
+        CFPreferencesCopyAppValue(
+            CFSTR("enabled"),
+            (__bridge CFStringRef)kPrefsID
+        );
+
+    if (value) {
+
+        if (CFGetTypeID(value) == CFBooleanGetTypeID()) {
+
+            gIsEnabled =
+                CFBooleanGetValue(
+                    (CFBooleanRef)value
+                );
+        }
+        else if (CFGetTypeID(value) == CFStringGetTypeID()) {
+
+            gIsEnabled =
+                [(__bridge NSString *)value boolValue];
+        }
+        else if (CFGetTypeID(value) == CFNumberGetTypeID()) {
+
+            gIsEnabled =
+                [(__bridge NSNumber *)value boolValue];
+        }
+
+        CFRelease(value);
+    }
+    else {
+
+        gIsEnabled = YES;
+    }
+}
+
+static BOOL IsRPCCModule(id instance)
+{
+    if (!instance) {
+        return NO;
+    }
+
+    SEL moduleSel =
+        sel_registerName("module");
+
+    if (![instance respondsToSelector:moduleSel]) {
+        return NO;
+    }
+
+    id module =
+        ((id (*)(id, SEL))objc_msgSend)(
+            instance,
+            moduleSel
+        );
+
+    if (!module) {
+        return NO;
+    }
+
+    NSString *name =
+        NSStringFromClass([module class]);
+
+    return [name isEqualToString:@"RPCCAudioSettingsModule"] ||
+           [name isEqualToString:@"RPCCVideoSettingsModule"];
+}
+
+static NSArray *FilterRPCCModules(NSArray *original)
+{
+    if (!original ||
+        ![original isKindOfClass:[NSArray class]] ||
+        original.count == 0) {
+
+        return original;
+    }
+
+    NSMutableArray *filtered =
+        [NSMutableArray arrayWithCapacity:original.count];
+
+    for (id instance in original) {
+
+        if (IsRPCCModule(instance)) {
+            continue;
+        }
+
+        [filtered addObject:instance];
+    }
+
+    return filtered;
+}
+
+static void CHNotifyModuleInstancesChanged(void)
+{
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            @autoreleasepool {
+
+                id collectionVC =
+                    gModuleCollectionViewController;
+
+                id manager =
+                    gModuleManager;
+
+                if (!collectionVC || !manager) {
+                    return;
+                }
+
+                SEL selector =
+                    sel_registerName(
+                        "moduleInstancesChangedForModuleInstanceManager:"
+                    );
+
+                if (![collectionVC
+                     respondsToSelector:selector]) {
+
+                    return;
+                }
+
+                ((void (*)(id, SEL, id))objc_msgSend)(
+                    collectionVC,
+                    selector,
+                    manager
+                );
+            }
+        }
+    );
+}
+
+static void CHRefreshControlCenter(void)
+{
+    dispatch_async(
+        dispatch_get_main_queue(),
+        ^{
+            @autoreleasepool {
+
+                Class vcClass =
+                    NSClassFromString(
+                        @"CCUIModularControlCenterViewController"
+                    ) ?:
+                    NSClassFromString(
+                        @"CCUIModularControlCenterOverlayViewController"
+                    );
+
+                if (!vcClass) {
+                    return;
+                }
+
+                SEL sharedSelector =
+                    sel_registerName(
+                        "_sharedCollectionViewController"
+                    );
+
+                if (![vcClass
+                     respondsToSelector:sharedSelector]) {
+
+                    return;
+                }
+
+                id collectionViewController =
+                    ((id (*)(id, SEL))objc_msgSend)(
+                        vcClass,
+                        sharedSelector
+                    );
+
+                if (!collectionViewController) {
+                    return;
+                }
+
+                SEL refreshSelector =
+                    sel_registerName(
+                        "_refreshPositionProviders"
+                    );
+
+                SEL updateSelector =
+                    sel_registerName(
+                        "_updatePositionProviders"
+                    );
+
+                if ([collectionViewController
+                     respondsToSelector:refreshSelector]) {
+
+                    ((void (*)(id, SEL))objc_msgSend)(
+                        collectionViewController,
+                        refreshSelector
+                    );
+                }
+                else if ([collectionViewController
+                          respondsToSelector:updateSelector]) {
+
+                    ((void (*)(id, SEL))objc_msgSend)(
+                        collectionViewController,
+                        updateSelector
+                    );
+                }
+            }
+        }
+    );
+}
+
+#pragma mark - Module Collection Controller
+
+%hook CCUIModuleCollectionViewController
+
+- (id)initWithModuleInstanceManager:(id)manager
+{
+    id result = %orig;
+
+    if (result) {
+        gModuleCollectionViewController = result;
+        gModuleManager = manager;
+    }
+
+    return result;
+}
+
+%end
+
+#pragma mark - Module Instance Manager
+
+%hook CCUIModuleInstanceManager
+
+- (NSArray *)moduleInstances
+{
+    NSArray *original = %orig;
+
+    if (!gIsEnabled) {
+        return original;
+    }
+
+    return FilterRPCCModules(original);
+}
+
+- (NSArray *)enabledModuleInstances
+{
+    NSArray *original = %orig;
+
+    if (!gIsEnabled) {
+        return original;
+    }
+
+    return FilterRPCCModules(original);
+}
+
+%end
+
+#pragma mark - Module Instance
+
+%hook CCUIModuleInstance
+
+- (CCUILayoutSize)prototypeModuleSize
+{
+    if (gIsEnabled &&
+        IsRPCCModule(self)) {
+
+        CCUILayoutSize zeroSize = {
+            0,
+            0
+        };
+
+        return zeroSize;
+    }
+
+    return %orig;
+}
+
+%end
+
+#pragma mark - Constructor
+
+__attribute__((constructor))
+static void CHInit(void)
+{
+    @autoreleasepool {
+
+        CHUpdateEnableState();
+
+        notify_register_dispatch(
+            [kNotifyName UTF8String],
+            &gStateToken,
+            dispatch_get_main_queue(),
+            ^(int token) {
+
+                BOOL oldState =
+                    gIsEnabled;
+
+                CHUpdateEnableState();
+
+                /*
+                 * 只在：
+                 * 隐藏 ON -> OFF
+                 *
+                 * 时通知真正的模块集合控制器
+                 * 重新处理 moduleInstances。
+                 */
+                if (oldState &&
+                    !gIsEnabled) {
+
+                    CHNotifyModuleInstancesChanged();
+                }
+
+                CHRefreshControlCenter();
+            }
+        );
+    }
+}
